@@ -3,37 +3,98 @@ The module to use HTK (Hidden markov model Tool Kit).
 """
 import sys
 import os
-os.chdir(r'C:\Users\A.Kunikoshi\source\repos\toolbox\toolbox')
+#os.chdir(r'C:\Users\A.Kunikoshi\source\repos\pyhtk\pyhtk')
 
 from subprocess import Popen, PIPE
-
-#import tempfile
-#import subprocess
-#import configparser
-
-#import pypyodbc
-#import numpy as np
-
-#import cLexicon
-
-def run(command):
-    """this function throws an exception if the return code is non-zero, then all the files HVite used are printed to std for convenience.
-    
-    Note: 
-        This code is copied from forced_alignment module.
-        https://git.webhosting.rug.nl/p253591/forced-alignment
-    """
-    p = Popen(command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
-    output, err = p.communicate(b"")
-    rc = p.returncode
-    if rc != 0:
-        raise Exception("Command failed: {}\n\nOutput:\n======={}\n\nError:\n======\n{}\n".format(
-            ' '.join(command), output.decode('utf-8'), err.decode('utf-8'))
-        )
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import file_handling as fh
 
 
+def run_command(command):
+	"""this function throws an exception if the return code is non-zero. 
+	
+	Note: 
+		This code is copied from forced_alignment module and editted.
+		https://git.webhosting.rug.nl/p253591/forced-alignment
+	"""
+	p = Popen(command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+	output, err = p.communicate(b"")
+	if p.returncode != 0:
+		raise Exception("Command failed: {}\n\nOutput:\n======={}\n\nError:\n======\n{}\n".format(
+			' '.join(command), output.decode('utf-8'), err.decode('utf-8'))
+		)
 
 
+def wav2mfc(config_hcopy, hcopy_scp):
+	run_command([
+		'HCopy','-C', config_hcopy,
+		'-S', hcopy_scp
+	])
+
+
+def flat_start(config_train, HCompV_scp, model_dir, proto):
+	"""
+	Args:
+		config_train:
+		HCompV_scp: a script file.
+		model_dir: the directory.
+		proto: a text file which includes the initial model. 
+	"""
+	run_command([
+		'HCompV', '-T', '1', 
+		'-C', config_train,
+		'-m', 
+		'-v', '0.01',
+		'-S', HCompV_scp,
+		'-M', model_dir,
+		proto
+    ])
+
+
+def make_hmmdefs(proto, hmmdefs, phonelist_txt):
+	""" allocate mean & variance to all phases in the phaselist """
+	curr_dir = os.path.dirname(os.path.abspath(__file__))
+	mkhmmdefs_pl = os.path.join(curr_dir, 'mkhmmdefs.pl')
+	
+	command = [
+		'perl', mkhmmdefs_pl,
+		proto, phonelist_txt
+	]
+
+	p = Popen(command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+	output, err = p.communicate()
+	output = output.decode()
+	if os.name == 'nt':
+		output = output.replace('\r', '')
+		output = output.replace('\n', '\r\n')
+
+	with open(hmmdefs, 'w') as f:
+		f.write(output)
+
+
+def re_estimation(config_train, hmmdefs, output_dir, HCompV_scp, phonelist_txt):
+	run_command([
+		'HERest', '-T', '1', 
+		'-C', config_train,
+		'-v', '0.01', 
+		'-H', hmmdefs,
+		'-M', output_dir, 
+		'-S', HCompV_scp, phonelist_txt
+	])
+
+
+def increase_mixture(hmmdefs, nmix, output_dir, phonelist_txt):
+	fh.make_new_directory(output_dir)
+	header_file = os.path.join(output_dir, 'mix' + str(nmix) + '.hed')
+	with open(header_file, 'w') as f:
+		f.write('MU ' + str(nmix) + ' {*.state[2-4].mix}')
+
+	run_command([
+		'HHEd', '-T', '1', 
+		'-H', hmmdefs, 
+		'-M', output_dir,
+		header_file, phonelist_txt
+	])
 
 #def txt2label(file_txt, file_lab):
 #	"""
