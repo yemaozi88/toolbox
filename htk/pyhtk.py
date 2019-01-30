@@ -4,10 +4,36 @@ The module to use HTK (Hidden markov model Tool Kit).
 import sys
 import os
 #os.chdir(r'C:\Users\A.Kunikoshi\source\repos\pyhtk\pyhtk')
-
 from subprocess import Popen, PIPE
+import re
+from tempfile import NamedTemporaryFile
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import file_handling as fh
+
+
+def _tokenize(text):
+	""" no symbols, numbers and '_'.
+	"""
+	return re.findall(r'[^\W\d_]+', text)
+
+
+def create_phonelist_file(phoneset, phonelist_txt):
+	with open(phonelist_txt, 'w') as f:
+		for i in phoneset:
+			f.write(i + '\n')
+
+
+def create_label_file(sentence, file_lab):
+    """Save an orthographycal transcription (or sentence) to the HTK label file.
+    
+    Args: 
+		sentence (str): sentence to store in the file_lab.
+		file_lab (path): path to the text file in which each word is written on a line in upper case.
+
+    """
+    with open(file_lab, 'w', encoding="utf-8") as f:
+        f.write('\n'.join(_tokenize(sentence.upper())) + '\n')
 
 
 def run_command(command):
@@ -81,6 +107,51 @@ def re_estimation(config_train, hmmdefs, output_dir, HCompV_scp, phonelist_txt):
 		'-M', output_dir, 
 		'-S', HCompV_scp, phonelist_txt
 	])
+
+
+def create_dictionary(sentence, global_ded, log_txt, dictionary_file, lexicon_file):
+	label_file = NamedTemporaryFile(mode='w', delete=False, encoding='utf-8')
+	label_file.close()
+	create_label_file(sentence, label_file.name)
+
+	phonelist_txt = NamedTemporaryFile(mode='w', delete=False, encoding='utf-8')
+	phonelist_txt.close()
+	
+	run_command([
+		'HDMan', '-w', label_file.name,
+		'-g', global_ded,
+		'-n', phonelist_txt.name,
+		'-l', log_txt, 
+		dictionary_file, lexicon_file
+	])
+
+	os.remove(label_file.name)
+	os.remove(phonelist_txt.name)
+
+
+def get_number_of_missing_words(log_txt):
+	with open(log_txt) as f:
+		lines = f.read()
+	result_ = re.findall(r'[\d]+ words required, [\d]+ missing', lines)
+	if len(result_) == 1:
+		result = result_[0].split(' ')
+	elif len(result_) == 0:
+		print('{} has no line of missing word information.'.format(log_txt))
+		raise
+	else:
+		print('{} includes multiple lines of missing word information.'.format(log_txt))
+		raise
+	return int(result[3])
+
+
+def create_dictionary_without_log(sentence, global_ded, dictionary_file, lexicon_file):
+	log_txt = NamedTemporaryFile(mode='w', delete=False, encoding='utf-8')
+	log_txt.close()
+	create_dictionary(
+		sentence, global_ded, log_txt.name, dictionary_file, lexicon_file)
+	number_of_missing_words = get_number_of_missing_words(log_txt.name)
+	os.remove(log_txt.name)
+	return number_of_missing_words
 
 
 def increase_mixture(hmmdefs, nmix, output_dir, phonelist_txt):
