@@ -4,12 +4,16 @@ The module to use HTK (Hidden markov model Tool Kit).
 import sys
 import os
 #os.chdir(r'C:\Users\A.Kunikoshi\source\repos\pyhtk\pyhtk')
-from subprocess import Popen, PIPE
+#from subprocess import Popen, PIPE
 import re
 from tempfile import NamedTemporaryFile
+import shutil
+
+import pandas as pd
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import file_handling as fh
+from scripts import run_command, run_command_with_output
 
 
 def _tokenize(text):
@@ -34,21 +38,6 @@ def create_label_file(sentence, label_file):
     """
     with open(label_file, 'w', encoding="utf-8") as f:
         f.write('\n'.join(_tokenize(sentence.upper())) + '\n')
-
-
-def run_command(command):
-	"""this function throws an exception if the return code is non-zero. 
-	
-	Note: 
-		This code is copied from forced_alignment module and editted.
-		https://git.webhosting.rug.nl/p253591/forced-alignment
-	"""
-	p = Popen(command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
-	output, err = p.communicate(b"")
-	if p.returncode != 0:
-		raise Exception("Command failed: {}\n\nOutput:\n======={}\n\nError:\n======\n{}\n".format(
-			' '.join(command), output.decode('utf-8'), err.decode('utf-8'))
-		)
 
 
 def wav2mfc(config_hcopy, hcopy_scp):
@@ -82,14 +71,11 @@ def create_hmmdefs(proto, hmmdefs, phonelist_txt):
 	curr_dir = os.path.dirname(os.path.abspath(__file__))
 	mkhmmdefs_pl = os.path.join(curr_dir, 'mkhmmdefs.pl')
 	
-	command = [
+	output = run_command_with_output([
 		'perl', mkhmmdefs_pl,
 		proto, phonelist_txt
-	]
+	])
 
-	p = Popen(command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
-	output, err = p.communicate()
-	output = output.decode()
 	if os.name == 'nt':
 		output = output.replace('\r', '')
 		output = output.replace('\n', '\r\n')
@@ -107,6 +93,47 @@ def re_estimation(config_train, hmmdefs, output_dir, HCompV_scp, phonelist_txt):
 		'-M', output_dir, 
 		'-S', HCompV_scp, phonelist_txt
 	])
+
+
+def re_estimation_until_saturated(output_dir, model0_dir, improvement_threshold, 
+								  config_train, hmmdefs_name, HCompV_scp, phonelist_txt, 
+								  test_dir,  config_rec, lattice_file, dictionary_txt):
+
+	fh.make_new_directory(output_dir)
+	if not os.path.exists(os.path.join(output_dir, 'iter0')):
+		shutil.copytree(model0_dir, os.path.join(output_dir, 'iter0'))
+	niter = 1
+	accuracy_ = 0
+	improvement = 100
+	while improvement > improvement_threshold:
+		hmm_n = 'iter' + str(niter)
+		hmm_n_pre = 'iter' + str(niter-1)
+		modeln_dir	   = os.path.join(output_dir, hmm_n)
+		modeln_dir_pre = os.path.join(output_dir, hmm_n_pre) 
+		
+		# re-estimation
+		fh.make_new_directory(modeln_dir)
+		re_estimation(
+			config_train,
+			os.path.join(modeln_dir_pre, hmmdefs_name), 
+			modeln_dir,
+			HCompV_scp, phonelist_txt)
+
+		# recognition
+		per_word = get_recognition_accuracy(
+			test_dir, 
+			config_rec, 
+			lattice_file, 
+			os.path.join(modeln_dir, hmmdefs_name),
+			dictionary_txt, 
+			phonelist_txt)
+		improvement = per_word['accuracy'] - accuracy_
+		print('accuracy of {0}: {1}[%] (improved {2:.2}[%])'.format(
+			hmm_n, per_word['accuracy'], improvement))
+		accuracy_ = per_word['accuracy']
+
+		niter = niter + 1
+	return niter - 1
 
 
 def create_dictionary(sentence, global_ded, log_txt, dictionary_file, lexicon_file):
@@ -168,31 +195,121 @@ def increase_mixture(hmmdefs, nmix, output_dir, phonelist_txt):
 	])
 
 
-def create_word_lattice_file(net_file, ltc_file):
+def create_word_lattice_file(network_file, lattice_file):
 	"""creats word level lattice files from a text file syntax description containing a set of rewrite rules based on extended Backus-Naur Form (EBNF).
 
 	Args:
-		net_file: word network.
-		ltc_file: word level lattice file.
+		network_file: word network.
+		lattice_file: word level lattice file.
 
 	Reference:
 		http://www1.icsi.berkeley.edu/Speech/docs/HTKBook/node247.html
 
 	"""
 	run_command([
-		'HParse', net_file, ltc_file
+		'HParse', network_file, lattice_file
 	])
 
 
-def recognition(config_rec, phase_ltc,):
-	run_command([
+def recognition(config_rec, lattice_file, hmm, dictionary_file, phonelist_txt, HVite_scp):
+	output = run_command_with_output([
 		'HVite', '-T', '1', 
 		'-C', config_rec, 
-		'-w', phase_ltc, 
+		'-w', lattice_file, 
 		'-H', hmm, 
-		'dictionary_txt', 'phaselist_txt', 
+		dictionary_file, phonelist_txt, 
 		'-S', HVite_scp
 	])
+	return output
+
+
+def load_recognition_output(output):
+	""" still under testing ... 
+
+	Args:
+		output: output obtained by recognition().
+
+	"""
+	output = output.split('\r\n')
+
+	# format the output.
+	output_ = ' '.join(output).split('File: ')
+	results = pd.DataFrame(index=[], columns=['filename', 'sequence', 'likelihood'])
+	for line in output_:
+		# sample of a line: 
+		# File: xxxxxx.fea it ii it it it  ==  [368 frames] -111.7648 [Ac=-41129.5 LM=0.0] (Act=11.0)
+		filename = line.split(' ')[0]
+		sequence = ' '.join(line.split(' ')[1:]).split(' == ')[0].strip()
+		line_ = line.replace(filename, '').replace(sequence, '')
+		likelihood = re.findall(r'[-\d.]+', line_)[1]
+	
+		result_ = pd.Series([filename, sequence, likelihood], index=results.columns)
+		results = results.append(result_, ignore_index = True)
+		#print('{0}: {1} ({2})'.format(filename, sequence, likelihood))
+
+	return results
+
+
+def calc_recognition_performance(dictionary_txt, HResults_scp):
+	output = run_command_with_output([
+		'HResults', '-T', '1', 
+		dictionary_txt, 
+		'-S', HResults_scp
+	])
+	return output
+
+
+def load_recognition_output_all(output):
+	output_ = output.split('------------------------ Overall Results --------------------------\r\n')[1]
+	per_sentence_ = output_.split('\r\n')[0]
+	performance = re.findall(r'[\d.]+', per_sentence_)
+	per_sentence = dict()
+	per_sentence['accuracy'] = float(performance[0])
+	per_sentence['correct']  = int(performance[1])
+	per_sentence['substitution'] = int(performance[2])
+	per_sentence['total']	 = int(performance[3])
+
+	per_word_	  = output_.split('\r\n')[1]
+	performance = re.findall(r'[\d.]+', per_word_)
+	per_word = dict()
+	per_word['accuracy']	 = float(performance[0])
+	per_word['correct']		 = int(performance[2])
+	per_word['deletion']	 = int(performance[3])
+	per_word['substitution'] = int(performance[4])
+	per_word['insertion']    = int(performance[5])
+	per_word['total']		 = int(performance[6])
+
+	return per_sentence, per_word
+
+
+def get_recognition_accuracy(test_dir, config_rec, lattice_file, hmmdefs, dictionary_txt, phonelist_txt):
+	# recognition
+	HVite_scp = NamedTemporaryFile(mode='w', delete=False)
+	HVite_scp.close()
+	fh.make_filelist(test_dir, HVite_scp.name, file_type='fea')	
+	output = recognition(
+		config_rec, 
+		lattice_file, 
+		hmmdefs, 
+		dictionary_txt, 
+		phonelist_txt, 
+		HVite_scp.name)
+	#result = pyhtk.load_recognition_output(output)
+	os.remove(HVite_scp.name)
+
+	# calculate the performance
+	HResult_scp = NamedTemporaryFile(mode='w', delete=False)
+	HResult_scp.close()
+	fh.make_filelist(test_dir, HResult_scp.name, file_type='rec')	
+	output = calc_recognition_performance(
+		dictionary_txt, 
+		HResult_scp.name)
+	_, per_word = load_recognition_output_all(output)
+	os.remove(HResult_scp.name)
+
+	return per_word
+
+
 #def txt2label(file_txt, label_file):
 #	"""
 #	Convert an orthographycal transcription to the HTK label.  

@@ -25,6 +25,9 @@
     <Compile Include="defaultfiles.py" />
     <Compile Include="file_handling.py" />
     <Compile Include="htk\pyhtk.py" />
+    <Compile Include="scripts.py">
+      <SubType>Code</SubType>
+    </Compile>
   </ItemGroup>
   <ItemGroup>
     <Folder Include="htk\" />
