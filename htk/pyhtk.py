@@ -77,7 +77,7 @@ def flat_start(config_train, HCompV_scp, model_dir, proto):
     ])
 
 
-def make_hmmdefs(proto, hmmdefs, phonelist_txt):
+def create_hmmdefs(proto, hmmdefs, phonelist_txt):
 	""" allocate mean & variance to all phases in the phaselist """
 	curr_dir = os.path.dirname(os.path.abspath(__file__))
 	mkhmmdefs_pl = os.path.join(curr_dir, 'mkhmmdefs.pl')
@@ -167,6 +167,32 @@ def increase_mixture(hmmdefs, nmix, output_dir, phonelist_txt):
 		header_file, phonelist_txt
 	])
 
+
+def create_word_lattice_file(net_file, ltc_file):
+	"""creats word level lattice files from a text file syntax description containing a set of rewrite rules based on extended Backus-Naur Form (EBNF).
+
+	Args:
+		net_file: word network.
+		ltc_file: word level lattice file.
+
+	Reference:
+		http://www1.icsi.berkeley.edu/Speech/docs/HTKBook/node247.html
+
+	"""
+	run_command([
+		'HParse', net_file, ltc_file
+	])
+
+
+def recognition(config_rec, phase_ltc,):
+	run_command([
+		'HVite', '-T', '1', 
+		'-C', config_rec, 
+		'-w', phase_ltc, 
+		'-H', hmm, 
+		'dictionary_txt', 'phaselist_txt', 
+		'-S', HVite_scp
+	])
 #def txt2label(file_txt, label_file):
 #	"""
 #	Convert an orthographycal transcription to the HTK label.  
