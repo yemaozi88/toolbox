@@ -24,15 +24,15 @@ def create_phonelist_file(phoneset, phonelist_txt):
 			f.write(i + '\n')
 
 
-def create_label_file(sentence, file_lab):
+def create_label_file(sentence, label_file):
     """Save an orthographycal transcription (or sentence) to the HTK label file.
     
     Args: 
-		sentence (str): sentence to store in the file_lab.
-		file_lab (path): path to the text file in which each word is written on a line in upper case.
+		sentence (str): sentence to store in the label_file.
+		label_file (path): path to the text file in which each word is written on a line in upper case.
 
     """
-    with open(file_lab, 'w', encoding="utf-8") as f:
+    with open(label_file, 'w', encoding="utf-8") as f:
         f.write('\n'.join(_tokenize(sentence.upper())) + '\n')
 
 
@@ -167,11 +167,11 @@ def increase_mixture(hmmdefs, nmix, output_dir, phonelist_txt):
 		header_file, phonelist_txt
 	])
 
-#def txt2label(file_txt, file_lab):
+#def txt2label(file_txt, label_file):
 #	"""
 #	Convert an orthographycal transcription to the HTK label.  
 #	:param path file_txt: path to the text file in which the orthographycal transcription of the utterance is written in one line.
-#	:param path file_lab: path to the text file in which the contents of file_txt is written as a word per line. 
+#	:param path label_file: path to the text file in which the contents of file_txt is written as a word per line. 
 #	"""
 #	# read the first line where the sentence is written.
 #	with open(file_txt, 'r') as f:
@@ -183,17 +183,17 @@ def increase_mixture(hmmdefs, nmix, output_dir, phonelist_txt):
 
 #	# write each word in a capital letter 
 #	line1list = line1.split(' ')
-#	with open(file_lab, 'w') as f:
+#	with open(label_file, 'w') as f:
 #		for word in line1list:
 #			f.write("%s\n" % word.upper())
 
 
-#def lab2HTKdic(file_lab, fileHTKdic, lex, connect):
+#def lab2HTKdic(label_file, fileHTKdic, lex, connect):
 #	"""
 #	Make a HTK dictionary file from a HTK label file.
 #	Each word in the label file is first searched in database. 
 #	If not found, the Grapheme-to-Phone(G2P) program is used.
-#	:param path file_lab: path to the text file in which the contents of file_txt is written as a word per line. 
+#	:param path label_file: path to the text file in which the contents of file_txt is written as a word per line. 
 #	:param path fileHTKdic: path to the output dictionary file in which pronunciation variants will be written. 
 #	:param instance lex: an instance of class cLexicon.
 #	:param pypyodbc connect: an object of pypyodbc.
@@ -201,7 +201,7 @@ def increase_mixture(hmmdefs, nmix, output_dir, phonelist_txt):
 #	cursor  = connect.cursor()
 #	tableList  = ['2010_2510_lexicon_pronvars_HTK', 'lexicon_pronvars_g2p', 'lexicon_pronvars_ipa']
 
-#	with open(file_lab, 'r') as f:
+#	with open(label_file, 'r') as f:
 #		lines = f.read()
 #		words = lines.split()
 
@@ -277,24 +277,24 @@ def increase_mixture(hmmdefs, nmix, output_dir, phonelist_txt):
 #	return np.array(htkdic)
 
 
-#def doHVite(fileWav, file_lab, fileHTKdic, fileFA, configHVite, filePhoneList, AcousticModel):
+#def doHVite(fileWav, label_file, fileHTKdic, fileFA, configHVite, filePhoneList, AcousticModel):
 #	"""
 #	Forced alignment using HVite of HTK.
 #	:param path fileWav: path to the wav file in which the utterance was recorded.
-#	:param path file_lab: path to the text file in which the contents of file_txt is written as a word per line. 
+#	:param path label_file: path to the text file in which the contents of file_txt is written as a word per line. 
 #	:param path fileHTKdic: path to the HTK dictionary file in which pronunciation variants are written.
 #	:param path fileFA: path to the output file in which forced alignment (100ns unit) will be written.
 #	:param path configHVite: path to the config file of HVite.
 #	:param path filePhoneList: path to the list of phone used in the acoustic model and in the HTK dictionary file.
 #	:param path AcousticModel: path to the acoustic model.
 #	"""
-#	with open(file_lab, 'r') as f:
+#	with open(label_file, 'r') as f:
 #		lines = f.read()
 
 #	# Master Label File (= list of label files.)
 #	fileMlf = tempfile.NamedTemporaryFile(mode='w', delete=False)
 #	fileMlf.write("#!MLF!#\n")
-#	fileMlf.write('"' + file_lab + '"\n')
+#	fileMlf.write('"' + label_file + '"\n')
 #	fileMlf.write(lines)
 #	fileMlf.close()
 
@@ -354,7 +354,7 @@ def increase_mixture(hmmdefs, nmix, output_dir, phonelist_txt):
 #	"""
 #	# label file: the list of words that appears in the wave file.
 #	#	should be in the same folder where wav file is stored.
-#	file_lab = fileWav.replace('.wav', '.lab')
+#	label_file = fileWav.replace('.wav', '.lab')
 #	# dic file: the pronunciation dictionary in which pronunciation(s) of each word in the label file are described.
 #	fileHTKdic = fileWav.replace('.wav', '.dic')
 #	# forced alignment output
@@ -389,19 +389,19 @@ def increase_mixture(hmmdefs, nmix, output_dir, phonelist_txt):
 
 #	# load the orthographical transcription 
 #	# and output that word by word (e.g. one word per line) in capital letters...
-#	txt2label(file_txt, file_lab)
+#	txt2label(file_txt, label_file)
 	
 #	# for each words in the label file pronunciation(s) are searched in lexicon database...
-#	lab2HTKdic(file_lab, fileHTKdic, lex, connect)
+#	lab2HTKdic(label_file, fileHTKdic, lex, connect)
 
 #	# forced alignment using HVite
-#	doHVite(fileWav, file_lab, fileHTKdic, fileFA.name, configHVite, filePhoneList, AcousticModel)
+#	doHVite(fileWav, label_file, fileHTKdic, fileFA.name, configHVite, filePhoneList, AcousticModel)
 #	conv100ns2ms(fileFA.name, fileOut)
 
 
 #	# termination process
 #	if saveIntermediateFiles == 0:
-#		os.remove(file_lab)
+#		os.remove(label_file)
 #		os.remove(fileHTKdic)
 #	os.remove(fileFA.name)
 #	connect.close()

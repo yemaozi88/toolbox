@@ -22,7 +22,18 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="defaultfiles.py" />
     <Compile Include="file_handling.py" />
+    <Compile Include="htk\pyhtk.py" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="htk\" />
+    <Folder Include="htk\__pycache__\" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="htk\mkhmmdefs.pl" />
+    <Content Include="htk\pyhtk.pyproj" />
+    <Content Include="htk\__pycache__\pyhtk.cpython-36.pyc" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in
