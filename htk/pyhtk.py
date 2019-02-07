@@ -87,34 +87,69 @@ def create_hmmdefs(proto, hmmdefs, phonelist_txt):
 		proto, phonelist_txt
 	])
 
-	#if os.name == 'nt':
-	#	output = output.replace('\r', '')
-	#	output = output.replace('\n', '\r\n')
+	if os.name == 'nt':
+		output = output.replace('\r', '')
+		output = output.replace('\n', '\r\n')
 
 	with open(hmmdefs, 'wb') as f:
 		f.write(bytes(output, 'ascii'))
 
 
-def re_estimation(config_train, macros, hmmdefs, output_dir, HCompV_scp, phonelist_txt, mlf_file=None):
-	run_command([
-		'HERest', '-T', '1', 
-		'-C', config_train,
-		'-v', '0.01', 
-		'-t', '250.0', '150.0', '1000.0',
-		'-I', mlf_file,
-		'-H', macros,
-		'-H', hmmdefs,
-		'-M', output_dir, 
-		'-S', HCompV_scp, phonelist_txt
-	])
+def re_estimation(config_train, hmmdefs, output_dir, HCompV_scp, phonelist_txt, mlf_file=None, macros=None):
+	if macros==None:
+		if mlf_file==None:
+			run_command([
+				'HERest', '-T', '1', 
+				'-C', config_train,
+				'-v', '0.01', 
+				'-t', '250.0', '150.0', '1000.0',
+				'-H', hmmdefs,
+				'-M', output_dir, 
+				'-S', HCompV_scp, phonelist_txt
+			])
+		else:
+			run_command([
+				'HERest', '-T', '1', 
+				'-C', config_train,
+				'-v', '0.01', 
+				'-t', '250.0', '150.0', '1000.0',
+				'-I', mlf_file,
+				'-H', hmmdefs,
+				'-M', output_dir, 
+				'-S', HCompV_scp, phonelist_txt
+			])
+	else:
+		if mlf_file==None:
+			run_command([
+				'HERest', '-T', '1', 
+				'-C', config_train,
+				'-v', '0.01', 
+				'-t', '250.0', '150.0', '1000.0',
+				'-H', macros,
+				'-H', hmmdefs,
+				'-M', output_dir, 
+				'-S', HCompV_scp, phonelist_txt
+			])
+		else:
+			run_command([
+				'HERest', '-T', '1', 
+				'-C', config_train,
+				'-v', '0.01', 
+				'-t', '250.0', '150.0', '1000.0',
+				'-I', mlf_file,
+				'-H', macros,
+				'-H', hmmdefs,
+				'-M', output_dir, 
+				'-S', HCompV_scp, phonelist_txt
+			])
 
 
 def re_estimation_until_saturated(output_dir, model0_dir, improvement_threshold, 
 								  config_train, hmmdefs_name, HCompV_scp, phonelist_txt, 
 								  test_dir,  config_rec, lattice_file, dictionary_txt):
 
-	fh.make_new_directory(output_dir)
 	if not os.path.exists(os.path.join(output_dir, 'iter0')):
+		#fh.make_new_directory(output_dir)
 		shutil.copytree(model0_dir, os.path.join(output_dir, 'iter0'))
 	niter = 1
 	accuracy_ = 0
@@ -126,12 +161,14 @@ def re_estimation_until_saturated(output_dir, model0_dir, improvement_threshold,
 		modeln_dir_pre = os.path.join(output_dir, hmm_n_pre) 
 		
 		# re-estimation
-		fh.make_new_directory(modeln_dir)
+		if not os.path.exists(modeln_dir):
+			fh.make_new_directory(modeln_dir)
 		re_estimation(
 			config_train,
 			os.path.join(modeln_dir_pre, hmmdefs_name), 
 			modeln_dir,
-			HCompV_scp, phonelist_txt)
+			HCompV_scp, 
+			phonelist_txt)
 
 		# recognition
 		per_word = get_recognition_accuracy(
