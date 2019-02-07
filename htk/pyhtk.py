@@ -22,22 +22,33 @@ def _tokenize(text):
 	return re.findall(r'[^\W\d_]+', text)
 
 
+def can_be_ascii(sentence):
+	try:
+		sentence_bytes = bytes(sentence, 'ascii')
+		return 0
+	except UnicodeEncodeError:
+		return -1
+
+
 def create_phonelist_file(phoneset, phonelist_txt):
-	with open(phonelist_txt, 'w') as f:
-		for i in phoneset:
-			f.write(i + '\n')
+	with open(phonelist_txt, 'wb') as f:
+		phonelist_string = '\n'.join(phoneset) + '\nsil\n'
+		f.write(bytes(phonelist_string, 'ascii'))
 
 
 def create_label_file(sentence, label_file):
-    """Save an orthographycal transcription (or sentence) to the HTK label file.
-    
-    Args: 
+	"""Save an orthographycal transcription (or sentence) to the HTK label file.
+	
+	Args: 
 		sentence (str): sentence to store in the label_file.
 		label_file (path): path to the text file in which each word is written on a line in upper case.
 
-    """
-    with open(label_file, 'w', encoding="utf-8") as f:
-        f.write('\n'.join(_tokenize(sentence.upper())) + '\n')
+	"""
+	#with open(label_file, 'w', encoding="utf-8") as f:
+	#	f.write()
+	with open(label_file, 'wb') as f:
+		label_string = '\n'.join(_tokenize(sentence.upper())) + '\n'
+		f.write(bytes(label_string, 'ascii'))
 
 
 def wav2mfc(config_hcopy, hcopy_scp):
@@ -58,12 +69,12 @@ def flat_start(config_train, HCompV_scp, model_dir, proto):
 	run_command([
 		'HCompV', '-T', '1', 
 		'-C', config_train,
+		'-f', '0.01',
 		'-m', 
-		'-v', '0.01',
 		'-S', HCompV_scp,
 		'-M', model_dir,
 		proto
-    ])
+	])
 
 
 def create_hmmdefs(proto, hmmdefs, phonelist_txt):
@@ -76,19 +87,22 @@ def create_hmmdefs(proto, hmmdefs, phonelist_txt):
 		proto, phonelist_txt
 	])
 
-	if os.name == 'nt':
-		output = output.replace('\r', '')
-		output = output.replace('\n', '\r\n')
+	#if os.name == 'nt':
+	#	output = output.replace('\r', '')
+	#	output = output.replace('\n', '\r\n')
 
-	with open(hmmdefs, 'w') as f:
-		f.write(output)
+	with open(hmmdefs, 'wb') as f:
+		f.write(bytes(output, 'ascii'))
 
 
-def re_estimation(config_train, hmmdefs, output_dir, HCompV_scp, phonelist_txt):
+def re_estimation(config_train, macros, hmmdefs, output_dir, HCompV_scp, phonelist_txt, mlf_file=None):
 	run_command([
 		'HERest', '-T', '1', 
 		'-C', config_train,
 		'-v', '0.01', 
+		'-t', '250.0', '150.0', '1000.0',
+		'-I', mlf_file,
+		'-H', macros,
 		'-H', hmmdefs,
 		'-M', output_dir, 
 		'-S', HCompV_scp, phonelist_txt
@@ -137,6 +151,8 @@ def re_estimation_until_saturated(output_dir, model0_dir, improvement_threshold,
 
 
 def create_dictionary(sentence, global_ded, log_txt, dictionary_file, lexicon_file):
+	""" when the length of the filename exceeds 32 characters, error.
+	"""
 	label_file = NamedTemporaryFile(mode='w', delete=False, encoding='utf-8')
 	label_file.close()
 	create_label_file(sentence, label_file.name)
@@ -157,7 +173,7 @@ def create_dictionary(sentence, global_ded, log_txt, dictionary_file, lexicon_fi
 
 
 def get_number_of_missing_words(log_txt):
-	with open(log_txt) as f:
+	with open(log_txt, encoding='utf-8') as f:
 		lines = f.read()
 	result_ = re.findall(r'[\d]+ words required, [\d]+ missing', lines)
 	if len(result_) == 1:
@@ -181,17 +197,37 @@ def create_dictionary_without_log(sentence, global_ded, dictionary_file, lexicon
 	return number_of_missing_words
 
 
+def mlf_word2phone(lexicon_file, mlf_phone, mlf_word, mkphones_led):
+	run_command([
+		'HLEd', '-l', '*', 
+		'-d', lexicon_file,
+		'-i', mlf_phone, 
+		mkphones_led,
+		mlf_word
+	])
+
+
 def increase_mixture(hmmdefs, nmix, output_dir, phonelist_txt):
 	fh.make_new_directory(output_dir)
 	header_file = os.path.join(output_dir, 'mix' + str(nmix) + '.hed')
-	with open(header_file, 'w') as f:
-		f.write('MU ' + str(nmix) + ' {*.state[2-4].mix}')
+	with open(header_file, 'wb') as f:
+		f.write(bytes('MU ' + str(nmix) + ' {*.state[2-4].mix}', 'ascii'))
 
 	run_command([
 		'HHEd', '-T', '1', 
 		'-H', hmmdefs, 
 		'-M', output_dir,
 		header_file, phonelist_txt
+	])
+
+
+def include_sil_in_hmmdefs(prototype, hmmdefs, output_dir, sil_hed, phonelist_txt):
+	run_command([
+		'HHEd', 
+		'-H', prototype, 
+		'-H', hmmdefs,
+		'-M', output_dir,
+		sil_hed, phonelist_txt
 	])
 
 
