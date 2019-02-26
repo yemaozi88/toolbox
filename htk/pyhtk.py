@@ -3,7 +3,7 @@ The module to use HTK (Hidden markov model Tool Kit).
 """
 import sys
 import os
-#os.chdir(r'C:\Users\A.Kunikoshi\source\repos\pyhtk\pyhtk')
+os.chdir(r'C:\Users\Aki\source\repos\toolbox\htk')
 #from subprocess import Popen, PIPE
 import re
 from tempfile import NamedTemporaryFile
@@ -11,23 +11,107 @@ import shutil
 
 import pandas as pd
 
+from . import defaultfiles as default
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import file_handling as fh
-from scripts import run_command, run_command_with_output
+from scripts import run_command
 
 
-def _tokenize(text):
-	""" no symbols, numbers and '_'.
-	"""
-	return re.findall(r'[^\W\d_]+', text)
 
 
-def can_be_ascii(sentence):
-	try:
-		sentence_bytes = bytes(sentence, 'ascii')
-		return 0
-	except UnicodeEncodeError:
-		return -1
+class HTK:
+	def __init__(self, 
+			  config_hcopy=default.config_hcopy, 
+			  global_ded=default.global_ded):
+		self.config_hcopy = config_hcopy
+		self.global_ded	  = global_ded
+		
+		self.command = ''
+		self.output = ''
+		self.error  = ''
+
+
+	def _tokenize(self, text):
+		""" extract only text as a list format. symbols, numbers and '_' are removed.
+		"""
+		return re.findall(r'[^\W\d_]+', text)
+
+
+	def can_be_ascii(self, sentence):
+		"""check if the sentence can be written in ascii. if not, return -1.
+		"""
+		try:
+			sentence_bytes = bytes(sentence, 'ascii')
+			return 0
+		except UnicodeEncodeError:
+			return -1
+
+		return
+
+
+	def create_label_file(self, sentence, label_file):
+		"""Save an orthographycal transcription (or sentence) to the HTK label file.
+	
+		Args: 
+			sentence (str): sentence to store in the label_file.
+			label_file (path): path to the text file in which each word is written on a line in upper case.
+
+		"""
+		#with open(label_file, 'w', encoding="utf-8") as f:
+		#	f.write()
+		with open(label_file, 'wb') as f:
+			label_string = '\n'.join(self._tokenize(sentence.upper())) + '\n'
+			f.write(bytes(label_string, 'ascii'))
+		return
+
+
+	def create_dictionary(self, sentence, log_txt, dictionary_file, lexicon_file):
+		""" when the length of the filename exceeds 32 characters, error.
+		"""
+		label_file = NamedTemporaryFile(mode='w', delete=False, encoding='utf-8')
+		label_file.close()
+		self.create_label_file(sentence, label_file.name)
+
+		phonelist_txt = NamedTemporaryFile(mode='w', delete=False, encoding='utf-8')
+		phonelist_txt.close()
+	
+		self.command, self.output, self.error = run_command([
+			'HDMan', '-w', label_file.name,
+			'-g', self.global_ded,
+			'-n', phonelist_txt.name,
+			'-l', log_txt, 
+			dictionary_file, lexicon_file
+		])
+
+		os.remove(label_file.name)
+		os.remove(phonelist_txt.name)
+
+		return
+
+
+	def read_number_of_missing_words(self, log_txt):
+		with open(log_txt, encoding='utf-8') as f:
+			lines = f.read()
+		result_ = re.findall(r'[\d]+ words required, [\d]+ missing', lines)
+		if len(result_) == 1:
+			result = result_[0].split(' ')
+		elif len(result_) == 0:
+			print('{} has no line of missing word information.'.format(log_txt))
+			raise
+		else:
+			print('{} includes multiple lines of missing word information.'.format(log_txt))
+			raise
+		return int(result[3])
+
+
+	def get_number_of_missing_words(self, sentence, dictionary_file, lexicon_file):
+		log_txt = NamedTemporaryFile(mode='w', delete=False, encoding='utf-8')
+		log_txt.close()
+		self.create_dictionary(
+			sentence, log_txt.name, dictionary_file, lexicon_file)
+		number_of_missing_words = self.read_number_of_missing_words(log_txt.name)
+		os.remove(log_txt.name)
+		return number_of_missing_words
 
 
 def create_phonelist_file(phoneset, phonelist_txt):
@@ -35,20 +119,6 @@ def create_phonelist_file(phoneset, phonelist_txt):
 		phonelist_string = '\n'.join(phoneset) + '\nsil\n'
 		f.write(bytes(phonelist_string, 'ascii'))
 
-
-def create_label_file(sentence, label_file):
-	"""Save an orthographycal transcription (or sentence) to the HTK label file.
-	
-	Args: 
-		sentence (str): sentence to store in the label_file.
-		label_file (path): path to the text file in which each word is written on a line in upper case.
-
-	"""
-	#with open(label_file, 'w', encoding="utf-8") as f:
-	#	f.write()
-	with open(label_file, 'wb') as f:
-		label_string = '\n'.join(_tokenize(sentence.upper())) + '\n'
-		f.write(bytes(label_string, 'ascii'))
 
 
 def wav2mfc(config_hcopy, hcopy_scp):
@@ -82,7 +152,7 @@ def create_hmmdefs(proto, hmmdefs, phonelist_txt):
 	curr_dir = os.path.dirname(os.path.abspath(__file__))
 	mkhmmdefs_pl = os.path.join(curr_dir, 'mkhmmdefs.pl')
 	
-	output = run_command_with_output([
+	_, output, _ = run_command([
 		'perl', mkhmmdefs_pl,
 		proto, phonelist_txt
 	])
@@ -187,51 +257,10 @@ def re_estimation_until_saturated(output_dir, model0_dir, improvement_threshold,
 	return niter - 1
 
 
-def create_dictionary(sentence, global_ded, log_txt, dictionary_file, lexicon_file):
-	""" when the length of the filename exceeds 32 characters, error.
-	"""
-	label_file = NamedTemporaryFile(mode='w', delete=False, encoding='utf-8')
-	label_file.close()
-	create_label_file(sentence, label_file.name)
-
-	phonelist_txt = NamedTemporaryFile(mode='w', delete=False, encoding='utf-8')
-	phonelist_txt.close()
-	
-	run_command([
-		'HDMan', '-w', label_file.name,
-		'-g', global_ded,
-		'-n', phonelist_txt.name,
-		'-l', log_txt, 
-		dictionary_file, lexicon_file
-	])
-
-	os.remove(label_file.name)
-	os.remove(phonelist_txt.name)
 
 
-def get_number_of_missing_words(log_txt):
-	with open(log_txt, encoding='utf-8') as f:
-		lines = f.read()
-	result_ = re.findall(r'[\d]+ words required, [\d]+ missing', lines)
-	if len(result_) == 1:
-		result = result_[0].split(' ')
-	elif len(result_) == 0:
-		print('{} has no line of missing word information.'.format(log_txt))
-		raise
-	else:
-		print('{} includes multiple lines of missing word information.'.format(log_txt))
-		raise
-	return int(result[3])
 
 
-def create_dictionary_without_log(sentence, global_ded, dictionary_file, lexicon_file):
-	log_txt = NamedTemporaryFile(mode='w', delete=False, encoding='utf-8')
-	log_txt.close()
-	create_dictionary(
-		sentence, global_ded, log_txt.name, dictionary_file, lexicon_file)
-	number_of_missing_words = get_number_of_missing_words(log_txt.name)
-	os.remove(log_txt.name)
-	return number_of_missing_words
 
 
 def mlf_word2phone(lexicon_file, mlf_phone, mlf_word, mkphones_led):
@@ -285,7 +314,7 @@ def create_word_lattice_file(network_file, lattice_file):
 
 
 def recognition(config_rec, lattice_file, hmm, dictionary_file, phonelist_txt, HVite_scp):
-	output = run_command_with_output([
+	_, output, _ = run_command([
 		'HVite', '-T', '1', 
 		'-C', config_rec, 
 		'-w', lattice_file, 
@@ -324,7 +353,7 @@ def load_recognition_output(output):
 
 
 def calc_recognition_performance(dictionary_txt, HResults_scp):
-	output = run_command_with_output([
+	_, output, _ = run_command([
 		'HResults', '-T', '1', 
 		dictionary_txt, 
 		'-S', HResults_scp
@@ -383,6 +412,8 @@ def get_recognition_accuracy(test_dir, config_rec, lattice_file, hmmdefs, dictio
 	return per_word
 
 
+#if __name__ == '__main__':
+	
 #def txt2label(file_txt, label_file):
 #	"""
 #	Convert an orthographycal transcription to the HTK label.  
@@ -621,5 +652,3 @@ def get_recognition_accuracy(test_dir, config_rec, lattice_file, hmmdefs, dictio
 #		os.remove(fileHTKdic)
 #	os.remove(fileFA.name)
 #	connect.close()
-
-

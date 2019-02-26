@@ -14,9 +14,10 @@ def run_command(command):
 		raise Exception("Command failed: {}\n\nOutput:\n======={}\n\nError:\n======\n{}\n".format(
 			' '.join(command), output.decode('utf-8'), err.decode('utf-8'))
 		)
+	return command, output.decode('utf-8'), err.decode('utf-8')
 
 
-def run_command_with_output(command):
-	p = Popen(command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
-	output, err = p.communicate(b"")
-	return output.decode()
+#def run_command_with_output(command):
+#	p = Popen(command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+#	output, err = p.communicate(b"")
+#	return output.decode()
