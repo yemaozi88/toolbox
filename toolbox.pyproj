@@ -22,9 +22,10 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="defaultfiles.py" />
     <Compile Include="file_handling.py" />
+    <Compile Include="htk\defaultfiles.py" />
     <Compile Include="htk\pyhtk.py" />
+    <Compile Include="pykaldi.py" />
     <Compile Include="scripts.py">
       <SubType>Code</SubType>
     </Compile>

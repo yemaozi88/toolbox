@@ -8,6 +8,7 @@ os.chdir(r'C:\Users\Aki\source\repos\toolbox\htk')
 import re
 from tempfile import NamedTemporaryFile
 import shutil
+import glob
 
 import pandas as pd
 
@@ -17,18 +18,42 @@ import file_handling as fh
 from scripts import run_command
 
 
-
-
 class HTK:
+	curr_dir = os.path.dirname(os.path.abspath(__file__))
+	mkhmmdefs_pl = os.path.join(curr_dir, 'mkhmmdefs.pl')
+
 	def __init__(self, 
-			  config_hcopy=default.config_hcopy, 
-			  global_ded=default.global_ded):
-		self.config_hcopy = config_hcopy
-		self.global_ded	  = global_ded
+			  config_dir,
+			  phoneset,
+			  lexicon_file,
+			  config_hcopy=default.config_hcopy,
+			  config_train=default.config_train,
+			  config_rec=default.config_rec,
+			  global_ded=default.global_ded,
+			  mkphones_led=default.mkphones_led):
 		
+		# user define.
+		self.lexicon_file = lexicon_file
+
+		# default settings.
+		self.config_hcopy = config_hcopy
+		self.config_train = config_train
+		self.config_rec   = config_rec
+		self.global_ded	  = global_ded
+		self.mkphones_led = mkphones_led
+
+		# files to be made.
+		print(">>> making a phonelist...")
+		self.phonelist_txt = os.path.join(config_dir, 'phonelist.txt')
+		self.phonelist_with_sp_txt = os.path.join(config_dir, 'phonelist_with_sp.txt')
+		self.create_phonelist_file(phoneset, self.phonelist_txt)
+		self.create_phonelist_file(phoneset, self.phonelist_with_sp_txt, with_sp=True)
+
 		self.command = ''
 		self.output = ''
 		self.error  = ''
+
+		return
 
 
 	def _tokenize(self, text):
@@ -49,6 +74,15 @@ class HTK:
 		return
 
 
+	def create_phonelist_file(self, phoneset, phonelist_txt, with_sp=False):
+		with open(phonelist_txt, 'wb') as f:
+			phonelist_string = '\n'.join(phoneset) + '\nsil\n'
+			if with_sp:
+				phonelist_string = phonelist_string + 'sp\n'
+			f.write(bytes(phonelist_string, 'ascii'))
+		return
+
+
 	def create_label_file(self, sentence, label_file):
 		"""Save an orthographycal transcription (or sentence) to the HTK label file.
 	
@@ -65,7 +99,31 @@ class HTK:
 		return
 
 
-	def create_dictionary(self, sentence, log_txt, dictionary_file, lexicon_file):
+	def label2mlf(self, label_dir, mlf_file):
+		"""Combine all label files (*.lab) in the directory as a master label file (.mlf)."""
+		lab_list = glob.glob(os.path.join(label_dir, '*.lab'))
+		with open(mlf_file, 'wb') as fmlf:
+			fmlf.write(bytes('#!MLF!#\n', 'ascii'))
+			for lab_file in lab_list:
+				filename = os.path.basename(lab_file)
+				fmlf.write(bytes('\"*/{}\"\n'.format(filename), 'ascii'))
+				with open(lab_file) as flab:
+					lines = flab.read()
+				fmlf.write(bytes(lines + '.\n', 'ascii'))
+		return
+
+
+	def mlf_word2phone(self, mlf_phone, mlf_word):
+		self.command, self.output, self.error = run_command([
+			'HLEd', '-l', '*', 
+			'-d', self.lexicon_file,
+			'-i', mlf_phone, 
+			self.mkphones_led,
+			mlf_word
+		])
+
+
+	def create_dictionary(self, sentence, log_txt, dictionary_file):
 		""" when the length of the filename exceeds 32 characters, error.
 		"""
 		label_file = NamedTemporaryFile(mode='w', delete=False, encoding='utf-8')
@@ -80,7 +138,8 @@ class HTK:
 			'-g', self.global_ded,
 			'-n', phonelist_txt.name,
 			'-l', log_txt, 
-			dictionary_file, lexicon_file
+			dictionary_file, 
+			self.lexicon_file
 		])
 
 		os.remove(label_file.name)
@@ -108,61 +167,199 @@ class HTK:
 		log_txt = NamedTemporaryFile(mode='w', delete=False, encoding='utf-8')
 		log_txt.close()
 		self.create_dictionary(
-			sentence, log_txt.name, dictionary_file, lexicon_file)
+			sentence, log_txt.name, dictionary_file)
 		number_of_missing_words = self.read_number_of_missing_words(log_txt.name)
 		os.remove(log_txt.name)
 		return number_of_missing_words
 
 
-def create_phonelist_file(phoneset, phonelist_txt):
-	with open(phonelist_txt, 'wb') as f:
-		phonelist_string = '\n'.join(phoneset) + '\nsil\n'
-		f.write(bytes(phonelist_string, 'ascii'))
+	def wav2mfc(self, hcopy_scp):
+		self.command, self.output, self.error = run_command([
+			'HCopy','-C', self.config_hcopy,
+			'-S', hcopy_scp
+		])
+		return
 
 
+	def _create_proto(self, proto_file, feature_size):
+		"""proto: a text file which includes the initial model. 
+		"""
 
-def wav2mfc(config_hcopy, hcopy_scp):
-	run_command([
-		'HCopy','-C', config_hcopy,
-		'-S', hcopy_scp
-	])
+		if feature_size % 10 == 0:
+			lines_mean = ('0.0 ' * 10 + '\n') * (feature_size // 10)
+			lines_variance = ('1.0 ' * 10 + '\n') * (feature_size // 10)
+		else:
+			lines_mean = ('0.0 ' * 10 + '\n') * (feature_size // 10) + ('0.0 ' * (feature_size % 10) + '\n')
+			lines_variance = ('1.0 ' * 10 + '\n') * (feature_size // 10) + ('1.0 ' * (feature_size % 10) + '\n')
+
+		feature_size_str = str(feature_size)
+		#feature_type = '<USER>'
+		feature_type = '<MFCC_Z_E_D_A>'
+		with open(proto_file, 'wb') as f:
+			line = '~o <VecSize> ' + feature_size_str + ' ' + feature_type + '<DiagC> <StreamInfo> 1 ' + feature_size_str + '\n'
+			f.write(bytes(line, 'ascii'))
+			f.write(bytes('<BeginHMM>\n', 'ascii'))
+			f.write(bytes('<NUMSTATES> 5\n', 'ascii'))
+		
+			for states in ['2', '3', '4']:
+				f.write(bytes('<STATE> ' + states + '<NUMMIXES> 1\n', 'ascii'))
+				f.write(bytes('<SWeights> 1 1\n', 'ascii'))		
+				f.write(bytes('<STREAM> 1\n', 'ascii'))
+				f.write(bytes('<MIXTURE> 1 1.000000e+00\n', 'ascii'))
+
+				f.write(bytes('<MEAN> ' + feature_size_str + '\n', 'ascii'))
+				f.write(bytes(lines_mean, 'ascii'))
+
+				f.write(bytes('<VARIANCE> ' + feature_size_str + '\n', 'ascii'))
+				f.write(bytes(lines_variance, 'ascii'))
+
+			f.write(bytes('<TRANSP> 5\n', 'ascii'))	
+			f.write(bytes('0.000000e+00 1.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00\n', 'ascii')) 
+			f.write(bytes('0.000000e+00 6.000000e-01 4.000000e-01 0.000000e+00 0.000000e+00\n', 'ascii')) 
+			f.write(bytes('0.000000e+00 0.000000e+00 6.000000e-01 4.000000e-01 0.000000e+00\n', 'ascii')) 
+			f.write(bytes('0.000000e+00 0.000000e+00 0.000000e+00 6.000000e-01 4.000000e-01\n', 'ascii')) 
+			f.write(bytes('0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00\n', 'ascii')) 
+			f.write(bytes('<ENDHMM>\n', 'ascii'))
+
+		return
 
 
-def flat_start(config_train, HCompV_scp, model_dir, proto):
-	"""
-	Args:
-		config_train:
-		HCompV_scp: a script file.
-		model_dir: the directory.
-		proto: a text file which includes the initial model. 
-	"""
-	run_command([
-		'HCompV', '-T', '1', 
-		'-C', config_train,
-		'-f', '0.01',
-		'-m', 
-		'-S', HCompV_scp,
-		'-M', model_dir,
-		proto
-	])
+	def flat_start(self, HCompV_scp, model_dir, feature_size):
+		"""
+		Args:
+			config_train:
+			HCompV_scp: a script file.
+			model_dir: the directory.
+		"""
+		proto_file = r'c:\OneDrive\Research\rug\experiments\acoustic_model\fame\htk\config\proto'
+		self._create_proto(proto_file, feature_size)
+
+		self.command, self.output, self.error = run_command([
+			'HCompV', '-T', '1', 
+			'-C', self.config_train,
+			'-f', '0.01',
+			'-m', 
+			'-S', HCompV_scp,
+			'-M', model_dir,
+			proto_file
+		])
+		return
 
 
-def create_hmmdefs(proto, hmmdefs, phonelist_txt):
-	""" allocate mean & variance to all phases in the phaselist """
-	curr_dir = os.path.dirname(os.path.abspath(__file__))
-	mkhmmdefs_pl = os.path.join(curr_dir, 'mkhmmdefs.pl')
+	def create_hmmdefs(self, proto_file, hmmdefs):
+		""" allocate mean & variance to all phases in the phaselist """
 	
-	_, output, _ = run_command([
-		'perl', mkhmmdefs_pl,
-		proto, phonelist_txt
-	])
+		_, output, _ = run_command([
+			'perl', 
+			HTK.mkhmmdefs_pl,
+			proto_file, 
+			self.phonelist_txt
+		])
 
-	if os.name == 'nt':
-		output = output.replace('\r', '')
-		output = output.replace('\n', '\r\n')
+		if os.name == 'nt':
+			output = output.replace('\r', '')
+			output = output.replace('\n', '\r\n')
 
-	with open(hmmdefs, 'wb') as f:
-		f.write(bytes(output, 'ascii'))
+		with open(hmmdefs, 'wb') as f:
+			f.write(bytes(output, 'ascii'))
+
+		return
+
+
+	def _network2lattice(self, network_file, lattice_file):
+		"""creats word level lattice files from a text file syntax description containing a set of rewrite rules based on extended Backus-Naur Form (EBNF).
+
+		Args:
+			network_file: word network.
+			lattice_file: word level lattice file.
+
+		Reference:
+			http://www1.icsi.berkeley.edu/Speech/docs/HTKBook/node247.html
+
+		"""
+		self.command, self.output, self.error = run_command([
+			'HParse', network_file, lattice_file
+		])
+		return
+
+
+	def recognition(self, lattice_file, hmm, HVite_scp, lexicon_file=None):
+		if lexicon_file==None:
+			lexicon_file = self.lexicon_file
+
+		self.command, self.output, self.error = run_command([
+			'HVite', '-T', '1', 
+			'-C', self.config_rec, 
+			'-w', lattice_file, 
+			'-H', hmm, 
+			lexicon_file, 
+			self.phonelist_txt, 
+			'-S', HVite_scp
+		])
+		return self._load_recognition_result()
+
+
+	def _load_recognition_result(self):
+		""" still under testing ... 
+
+		Args:
+			output: output obtained by recognition().
+
+		"""
+		output = self.output.split('\r\n')
+
+		# format the output.
+		output_ = ' '.join(output).split('File: ')
+		results = pd.DataFrame(index=[], columns=['filename', 'sequence', 'likelihood'])
+		for line in output_:
+			# sample of a line: 
+			# File: xxxxxx.fea it ii it it it  ==  [368 frames] -111.7648 [Ac=-41129.5 LM=0.0] (Act=11.0)
+			filename = line.split(' ')[0]
+			sequence = ' '.join(line.split(' ')[1:]).split(' == ')[0].strip()
+			line_ = line.replace(filename, '').replace(sequence, '')
+			likelihood = re.findall(r'[-\d.]+', line_)[1]
+	
+			result_ = pd.Series([filename, sequence, likelihood], index=results.columns)
+			results = results.append(result_, ignore_index = True)
+			#print('{0}: {1} ({2})'.format(filename, sequence, likelihood))
+
+		return results
+
+
+	def calc_recognition_performance(self, HResults_scp, lexicon_file=None):
+		if lexicon_file==None:
+			lexicon_file = self.lexicon_file
+
+		self.command, self.output, self.error = run_command([
+			'HResults', '-T', '1', 
+			lexicon_file, 
+			'-S', HResults_scp
+		])
+		return self._load_recognition_performance()
+
+
+	def _load_recognition_performance(self):
+		output_ = self.output.split('------------------------ Overall Results --------------------------\r\n')[1]
+		per_sentence_ = output_.split('\r\n')[0]
+		performance = re.findall(r'[\d.]+', per_sentence_)
+		per_sentence = dict()
+		per_sentence['accuracy'] = float(performance[0])
+		per_sentence['correct']  = int(performance[1])
+		per_sentence['substitution'] = int(performance[2])
+		per_sentence['total']	 = int(performance[3])
+
+		per_word_	  = output_.split('\r\n')[1]
+		performance = re.findall(r'[\d.]+', per_word_)
+		per_word = dict()
+		per_word['accuracy']	 = float(performance[0])
+		per_word['correct']		 = int(performance[2])
+		per_word['deletion']	 = int(performance[3])
+		per_word['substitution'] = int(performance[4])
+		per_word['insertion']    = int(performance[5])
+		per_word['total']		 = int(performance[6])
+
+		return per_sentence, per_word
+
 
 
 def re_estimation(config_train, hmmdefs, output_dir, HCompV_scp, phonelist_txt, mlf_file=None, macros=None):
@@ -257,22 +454,6 @@ def re_estimation_until_saturated(output_dir, model0_dir, improvement_threshold,
 	return niter - 1
 
 
-
-
-
-
-
-
-def mlf_word2phone(lexicon_file, mlf_phone, mlf_word, mkphones_led):
-	run_command([
-		'HLEd', '-l', '*', 
-		'-d', lexicon_file,
-		'-i', mlf_phone, 
-		mkphones_led,
-		mlf_word
-	])
-
-
 def increase_mixture(hmmdefs, nmix, output_dir, phonelist_txt):
 	fh.make_new_directory(output_dir)
 	header_file = os.path.join(output_dir, 'mix' + str(nmix) + '.hed')
@@ -295,93 +476,6 @@ def include_sil_in_hmmdefs(prototype, hmmdefs, output_dir, sil_hed, phonelist_tx
 		'-M', output_dir,
 		sil_hed, phonelist_txt
 	])
-
-
-def create_word_lattice_file(network_file, lattice_file):
-	"""creats word level lattice files from a text file syntax description containing a set of rewrite rules based on extended Backus-Naur Form (EBNF).
-
-	Args:
-		network_file: word network.
-		lattice_file: word level lattice file.
-
-	Reference:
-		http://www1.icsi.berkeley.edu/Speech/docs/HTKBook/node247.html
-
-	"""
-	run_command([
-		'HParse', network_file, lattice_file
-	])
-
-
-def recognition(config_rec, lattice_file, hmm, dictionary_file, phonelist_txt, HVite_scp):
-	_, output, _ = run_command([
-		'HVite', '-T', '1', 
-		'-C', config_rec, 
-		'-w', lattice_file, 
-		'-H', hmm, 
-		dictionary_file, phonelist_txt, 
-		'-S', HVite_scp
-	])
-	return output
-
-
-def load_recognition_output(output):
-	""" still under testing ... 
-
-	Args:
-		output: output obtained by recognition().
-
-	"""
-	output = output.split('\r\n')
-
-	# format the output.
-	output_ = ' '.join(output).split('File: ')
-	results = pd.DataFrame(index=[], columns=['filename', 'sequence', 'likelihood'])
-	for line in output_:
-		# sample of a line: 
-		# File: xxxxxx.fea it ii it it it  ==  [368 frames] -111.7648 [Ac=-41129.5 LM=0.0] (Act=11.0)
-		filename = line.split(' ')[0]
-		sequence = ' '.join(line.split(' ')[1:]).split(' == ')[0].strip()
-		line_ = line.replace(filename, '').replace(sequence, '')
-		likelihood = re.findall(r'[-\d.]+', line_)[1]
-	
-		result_ = pd.Series([filename, sequence, likelihood], index=results.columns)
-		results = results.append(result_, ignore_index = True)
-		#print('{0}: {1} ({2})'.format(filename, sequence, likelihood))
-
-	return results
-
-
-def calc_recognition_performance(dictionary_txt, HResults_scp):
-	_, output, _ = run_command([
-		'HResults', '-T', '1', 
-		dictionary_txt, 
-		'-S', HResults_scp
-	])
-	return output
-
-
-def load_recognition_output_all(output):
-	output_ = output.split('------------------------ Overall Results --------------------------\r\n')[1]
-	per_sentence_ = output_.split('\r\n')[0]
-	performance = re.findall(r'[\d.]+', per_sentence_)
-	per_sentence = dict()
-	per_sentence['accuracy'] = float(performance[0])
-	per_sentence['correct']  = int(performance[1])
-	per_sentence['substitution'] = int(performance[2])
-	per_sentence['total']	 = int(performance[3])
-
-	per_word_	  = output_.split('\r\n')[1]
-	performance = re.findall(r'[\d.]+', per_word_)
-	per_word = dict()
-	per_word['accuracy']	 = float(performance[0])
-	per_word['correct']		 = int(performance[2])
-	per_word['deletion']	 = int(performance[3])
-	per_word['substitution'] = int(performance[4])
-	per_word['insertion']    = int(performance[5])
-	per_word['total']		 = int(performance[6])
-
-	return per_sentence, per_word
 
 
 def get_recognition_accuracy(test_dir, config_rec, lattice_file, hmmdefs, dictionary_txt, phonelist_txt):
