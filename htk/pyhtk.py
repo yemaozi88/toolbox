@@ -26,14 +26,18 @@ class HTK:
 			  config_dir,
 			  phoneset,
 			  lexicon_file,
+			  feature_size,
+			  feature_kind=None,
 			  config_hcopy=default.config_hcopy,
 			  config_train=default.config_train,
 			  config_rec=default.config_rec,
 			  global_ded=default.global_ded,
-			  mkphones_led=default.mkphones_led):
+			  mkphones_led=default.mkphones_led,
+			  sil_hed=default.sil_hed):
 		
 		# user define.
 		self.lexicon_file = lexicon_file
+		self.feature_size = feature_size
 
 		# default settings.
 		self.config_hcopy = config_hcopy
@@ -41,9 +45,21 @@ class HTK:
 		self.config_rec   = config_rec
 		self.global_ded	  = global_ded
 		self.mkphones_led = mkphones_led
+		self.sil_hed	  = sil_hed 
+
+		# set feature kind.
+		# if not specified, load it from config.HCopy
+		if feature_kind == None:
+			with open(config_hcopy, 'r') as f:
+				lines = f.read().replace('\t', '').split('\n')
+			line = [line for line in lines if 'TARGETKIND' in line]
+			line = line[0].replace(' ', '') # remove space
+			line = line.split('#')[0]		# remove comments
+			self.feature_kind = line.split('=')[1]
+		else:
+			self.feature_kind = feature_kind
 
 		# files to be made.
-		print(">>> making a phonelist...")
 		self.phonelist_txt = os.path.join(config_dir, 'phonelist.txt')
 		self.phonelist_with_sp_txt = os.path.join(config_dir, 'phonelist_with_sp.txt')
 		self.create_phonelist_file(phoneset, self.phonelist_txt)
@@ -181,10 +197,10 @@ class HTK:
 		return
 
 
-	def _create_proto(self, proto_file, feature_size):
+	def _create_proto(self, proto):
 		"""proto: a text file which includes the initial model. 
 		"""
-
+		feature_size = self.feature_size
 		if feature_size % 10 == 0:
 			lines_mean = ('0.0 ' * 10 + '\n') * (feature_size // 10)
 			lines_variance = ('1.0 ' * 10 + '\n') * (feature_size // 10)
@@ -193,10 +209,8 @@ class HTK:
 			lines_variance = ('1.0 ' * 10 + '\n') * (feature_size // 10) + ('1.0 ' * (feature_size % 10) + '\n')
 
 		feature_size_str = str(feature_size)
-		#feature_type = '<USER>'
-		feature_type = '<MFCC_Z_E_D_A>'
-		with open(proto_file, 'wb') as f:
-			line = '~o <VecSize> ' + feature_size_str + ' ' + feature_type + '<DiagC> <StreamInfo> 1 ' + feature_size_str + '\n'
+		with open(proto, 'wb') as f:
+			line = '~o <VecSize> ' + feature_size_str + ' <' + self.feature_kind + '><DiagC> <StreamInfo> 1 ' + feature_size_str + '\n'
 			f.write(bytes(line, 'ascii'))
 			f.write(bytes('<BeginHMM>\n', 'ascii'))
 			f.write(bytes('<NUMSTATES> 5\n', 'ascii'))
@@ -224,15 +238,15 @@ class HTK:
 		return
 
 
-	def flat_start(self, HCompV_scp, model_dir, feature_size):
+	def flat_start(self, HCompV_scp, model_dir):
 		"""
 		Args:
 			config_train:
 			HCompV_scp: a script file.
 			model_dir: the directory.
 		"""
-		proto_file = r'c:\OneDrive\Research\rug\experiments\acoustic_model\fame\htk\config\proto'
-		self._create_proto(proto_file, feature_size)
+		proto = r'c:\OneDrive\Research\rug\experiments\acoustic_model\fame\htk\config\proto'
+		self._create_proto(proto)
 
 		self.command, self.output, self.error = run_command([
 			'HCompV', '-T', '1', 
@@ -241,18 +255,18 @@ class HTK:
 			'-m', 
 			'-S', HCompV_scp,
 			'-M', model_dir,
-			proto_file
+			proto
 		])
 		return
 
 
-	def create_hmmdefs(self, proto_file, hmmdefs):
+	def create_hmmdefs(self, proto, hmmdefs):
 		""" allocate mean & variance to all phases in the phaselist """
 	
 		_, output, _ = run_command([
 			'perl', 
 			HTK.mkhmmdefs_pl,
-			proto_file, 
+			proto, 
 			self.phonelist_txt
 		])
 
@@ -263,6 +277,43 @@ class HTK:
 		with open(hmmdefs, 'wb') as f:
 			f.write(bytes(output, 'ascii'))
 
+		return
+
+
+	def create_macros(self, vFloors):
+		macros = vFloors.replace('vFloors', 'macros')
+		with open(vFloors, 'r') as f:
+			lines = f.read()
+		with open(macros, 'wb') as f:
+			line = '~o <' + self.feature_kind + '> <VecSize> ' + str(self.feature_size)
+			f.write(bytes(line + '\n' + lines, 'ascii'))
+		return
+
+
+	def re_estimation(self, hmmdefs, output_dir, HCompV_scp, mlf_file=None, macros=None):
+		command_list = []
+		command_list.extend([
+			'HERest', '-T', '1', 
+			'-C', self.config_train,
+			'-v', '0.01', 
+			'-t', '250.0', '150.0', '1000.0',
+			'-H', hmmdefs, 
+			'-M', output_dir
+			])
+		if not mlf_file==None:
+			command_list.extend(
+				['-I', mlf_file]
+			)
+		if not macros==None:
+			command_list.extend(
+				['-H', macros]
+			)
+		command_list.extend(
+			['-S', HCompV_scp, self.phonelist_txt]
+		)
+
+		self.command, self.output, self.error = run_command(command_list)
+		
 		return
 
 
@@ -283,7 +334,7 @@ class HTK:
 		return
 
 
-	def recognition(self, lattice_file, hmm, HVite_scp, lexicon_file=None):
+	def recognition(self, lattice_file, hmmdefs, HVite_scp, lexicon_file=None):
 		if lexicon_file==None:
 			lexicon_file = self.lexicon_file
 
@@ -291,7 +342,7 @@ class HTK:
 			'HVite', '-T', '1', 
 			'-C', self.config_rec, 
 			'-w', lattice_file, 
-			'-H', hmm, 
+			'-H', hmmdefs, 
 			lexicon_file, 
 			self.phonelist_txt, 
 			'-S', HVite_scp
@@ -361,97 +412,139 @@ class HTK:
 		return per_sentence, per_word
 
 
-
-def re_estimation(config_train, hmmdefs, output_dir, HCompV_scp, phonelist_txt, mlf_file=None, macros=None):
-	if macros==None:
-		if mlf_file==None:
-			run_command([
-				'HERest', '-T', '1', 
-				'-C', config_train,
-				'-v', '0.01', 
-				'-t', '250.0', '150.0', '1000.0',
-				'-H', hmmdefs,
-				'-M', output_dir, 
-				'-S', HCompV_scp, phonelist_txt
-			])
-		else:
-			run_command([
-				'HERest', '-T', '1', 
-				'-C', config_train,
-				'-v', '0.01', 
-				'-t', '250.0', '150.0', '1000.0',
-				'-I', mlf_file,
-				'-H', hmmdefs,
-				'-M', output_dir, 
-				'-S', HCompV_scp, phonelist_txt
-			])
-	else:
-		if mlf_file==None:
-			run_command([
-				'HERest', '-T', '1', 
-				'-C', config_train,
-				'-v', '0.01', 
-				'-t', '250.0', '150.0', '1000.0',
-				'-H', macros,
-				'-H', hmmdefs,
-				'-M', output_dir, 
-				'-S', HCompV_scp, phonelist_txt
-			])
-		else:
-			run_command([
-				'HERest', '-T', '1', 
-				'-C', config_train,
-				'-v', '0.01', 
-				'-t', '250.0', '150.0', '1000.0',
-				'-I', mlf_file,
-				'-H', macros,
-				'-H', hmmdefs,
-				'-M', output_dir, 
-				'-S', HCompV_scp, phonelist_txt
-			])
-
-
-def re_estimation_until_saturated(output_dir, model0_dir, improvement_threshold, 
-								  config_train, hmmdefs_name, HCompV_scp, phonelist_txt, 
-								  test_dir,  config_rec, lattice_file, dictionary_txt):
-
-	if not os.path.exists(os.path.join(output_dir, 'iter0')):
-		#fh.make_new_directory(output_dir)
-		shutil.copytree(model0_dir, os.path.join(output_dir, 'iter0'))
-	niter = 1
-	accuracy_ = 0
-	improvement = 100
-	while improvement > improvement_threshold:
-		hmm_n = 'iter' + str(niter)
-		hmm_n_pre = 'iter' + str(niter-1)
-		modeln_dir	   = os.path.join(output_dir, hmm_n)
-		modeln_dir_pre = os.path.join(output_dir, hmm_n_pre) 
-		
-		# re-estimation
-		if not os.path.exists(modeln_dir):
-			fh.make_new_directory(modeln_dir)
-		re_estimation(
-			config_train,
-			os.path.join(modeln_dir_pre, hmmdefs_name), 
-			modeln_dir,
-			HCompV_scp, 
-			phonelist_txt)
+	def get_recognition_accuracy(self, 
+							  test_dir, file_type, 
+							  lattice_file, hmmdefs, lexicon_file=None):
+		if lexicon_file==None:
+			lexicon_file = self.lexicon_file
 
 		# recognition
-		per_word = get_recognition_accuracy(
-			test_dir, 
-			config_rec, 
+		HVite_scp = NamedTemporaryFile(mode='w', delete=False)
+		HVite_scp.close()
+		fh.make_filelist(test_dir, HVite_scp.name, file_type=file_type)
+		output = self.recognition(
 			lattice_file, 
-			os.path.join(modeln_dir, hmmdefs_name),
-			dictionary_txt, 
-			phonelist_txt)
-		improvement = per_word['accuracy'] - accuracy_
-		print('accuracy of {0}: {1}[%] (improved {2:.2}[%])'.format(
-			hmm_n, per_word['accuracy'], improvement))
-		accuracy_ = per_word['accuracy']
+			hmmdefs, 
+			HVite_scp.name, 
+			lexicon_file=lexicon_file)
+		os.remove(HVite_scp.name)
 
-		niter = niter + 1
-	return niter - 1
+		# calculate the performance
+		HResult_scp = NamedTemporaryFile(mode='w', delete=False)
+		HResult_scp.close()
+		fh.make_filelist(test_dir, HResult_scp.name, file_type='rec')	
+		performance = self.calc_recognition_performance(
+			HResult_scp.name, 
+			lexicon_file=lexicon_file)
+
+		return performance
+
+
+	def re_estimation_until_saturated(
+		self, output_dir, model0_dir, improvement_threshold, hcompv_scp, 
+		test_dir, file_type, lattice_file, mlf_file=None, lexicon_file=None):
+
+		if lexicon_file==None:
+			lexicon_file = self.lexicon_file
+		if not os.path.exists(os.path.join(output_dir, 'iter0')):
+			shutil.copytree(model0_dir, os.path.join(output_dir, 'iter0'))
+
+		niter = 1
+		accuracy_ = 0
+		improvement = 100
+		while improvement > improvement_threshold:
+			hmm_n = 'iter' + str(niter)
+			hmm_n_pre = 'iter' + str(niter-1)
+			modeln_dir	   = os.path.join(output_dir, hmm_n)
+			modeln_dir_pre = os.path.join(output_dir, hmm_n_pre) 
+		
+			# re-estimation
+			fh.make_new_directory(modeln_dir, 'leave')
+			self.re_estimation(
+				os.path.join(modeln_dir_pre, 'hmmdefs'), 
+				modeln_dir,
+				hcompv_scp,
+				mlf_file=mlf_file, 
+				macros=os.path.join(modeln_dir_pre, 'macros'))
+
+			# recognition
+			per_sentence, per_word = self.get_recognition_accuracy( 
+				test_dir, file_type, lattice_file, 
+				os.path.join(modeln_dir, 'hmmdefs'), 
+				lexicon_file=lexicon_file)
+			accuracy = per_sentence['accuracy']
+			improvement = accuracy - accuracy_
+			print('accuracy of {0}: {1}[%] (improved {2:.2}[%])'.format(
+				hmm_n, accuracy, improvement))
+			accuracy_ = accuracy
+
+			niter = niter + 1
+		return niter - 1
+
+
+	def _add_sp_to_hmmdefs(self, hmmdefs_pre, hmmdefs):
+		with open(hmmdefs, 'wb') as fout:
+			with open(hmmdefs_pre) as fin:
+				lines = fin.read()
+			fout.write(bytes(lines, 'ascii'))
+			fout.write(bytes('~h "sp"\n', 'ascii'))
+			fout.write(bytes('<BEGINHMM>\n', 'ascii'))
+			fout.write(bytes('<NUMSTATES> 3\n', 'ascii'))
+			fout.write(bytes('<STATE> 2\n', 'ascii'))
+		
+			lines = lines.split('\n')
+			sil_state = lines[lines.index('~h "sil"'):]
+		
+			# mean, variance and gconst of 'sil'
+			sil_state3_index = sil_state.index('<STATE> 3')
+			sil_state4_index = sil_state.index('<STATE> 4')
+			sil_state3 = sil_state[sil_state3_index+3:sil_state4_index]
+			fout.write(bytes('\n'.join(sil_state3) + '\n', 'ascii'))
+			fout.write(bytes('<TRANSP> 3\n', 'ascii'))
+
+			# transp
+			sil_transp = sil_state[sil_state.index('<TRANSP> 5')+3]
+			sil_transp = sil_transp.strip().split(' ')
+			fout.write(bytes('0.000000e+00 1.000000e+00 0.000000e+00\n', 'ascii'))
+			fout.write(bytes('0.000000e+00 ' + sil_transp[2] + ' ' + sil_transp[3] + '\n', 'ascii'))
+			fout.write(bytes('0.000000e+00 0.000000e+00 0.000000e+00\n', 'ascii'))
+			fout.write(bytes('<ENDHMM>\n', 'ascii'))
+		return
+
+
+	def _tie_sp_to_sil(self, macros, hmmdefs, output_dir):
+		self.command, self.output, self.error = run_command([
+			'HHEd', 
+			'-H', macros, 
+			'-H', hmmdefs,
+			'-M', output_dir,
+			self.sil_hed, 
+			self.phonelist_txt
+		])
+		return
+
+
+	def add_sp(self, model_dir_pre, model_dir):
+		hmmdefs_ = NamedTemporaryFile(mode='w', delete=False)
+		hmmdefs_.close()
+
+		# add sp to hmmdefs.
+		self._add_sp_to_hmmdefs(
+			os.path.join(model_dir_pre, 'hmmdefs'), 
+			hmmdefs_.name)
+		
+		# update hmmdefs and macros.
+		fh.make_new_directory(model_dir)
+		self._tie_sp_to_sil(
+			os.path.join(model_dir_pre, 'macros'), 
+			hmmdefs_.name, 
+			model_dir)
+
+		os.rename(
+			os.path.join(model_dir, os.path.basename(hmmdefs_.name)), 
+			os.path.join(model_dir, 'hmmdefs'))
+		os.remove(hmmdefs_.name)
+		return
 
 
 def increase_mixture(hmmdefs, nmix, output_dir, phonelist_txt):
@@ -468,42 +561,10 @@ def increase_mixture(hmmdefs, nmix, output_dir, phonelist_txt):
 	])
 
 
-def include_sil_in_hmmdefs(prototype, hmmdefs, output_dir, sil_hed, phonelist_txt):
-	run_command([
-		'HHEd', 
-		'-H', prototype, 
-		'-H', hmmdefs,
-		'-M', output_dir,
-		sil_hed, phonelist_txt
-	])
 
 
-def get_recognition_accuracy(test_dir, config_rec, lattice_file, hmmdefs, dictionary_txt, phonelist_txt):
-	# recognition
-	HVite_scp = NamedTemporaryFile(mode='w', delete=False)
-	HVite_scp.close()
-	fh.make_filelist(test_dir, HVite_scp.name, file_type='fea')	
-	output = recognition(
-		config_rec, 
-		lattice_file, 
-		hmmdefs, 
-		dictionary_txt, 
-		phonelist_txt, 
-		HVite_scp.name)
-	#result = pyhtk.load_recognition_output(output)
-	os.remove(HVite_scp.name)
 
-	# calculate the performance
-	HResult_scp = NamedTemporaryFile(mode='w', delete=False)
-	HResult_scp.close()
-	fh.make_filelist(test_dir, HResult_scp.name, file_type='rec')	
-	output = calc_recognition_performance(
-		dictionary_txt, 
-		HResult_scp.name)
-	_, per_word = load_recognition_output_all(output)
-	os.remove(HResult_scp.name)
 
-	return per_word
 
 
 #if __name__ == '__main__':
